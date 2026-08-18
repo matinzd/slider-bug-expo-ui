@@ -1,56 +1,93 @@
-# Welcome to your Expo app 👋
+# @expo/ui SwiftUI `Slider` ignores `value` prop updates after the first drag
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Minimal reproduction for a bug in `@expo/ui`'s SwiftUI `Slider` on iOS: once the
+user has dragged the thumb, the component permanently stops applying
+programmatic updates to the `value` prop. JS state keeps changing, the thumb
+never moves again.
 
-## Get started
+- Affected: `@expo/ui` `57.0.9` and `57.0.11` (`ios/SliderView.swift` is
+  byte-identical in both)
+- Platform: iOS only. The Jetpack Compose implementation does not share the bug.
+- Repro screen: [`src/app/index.tsx`](src/app/index.tsx)
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Run it
 
 ```bash
-npm run reset-project
+npm install
+npx expo run:ios
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Steps
 
-### Other setup steps
+1. Tap **Set 7.5** — the thumb moves. Prop-driven updates work before any drag.
+2. Drag the slider anywhere and release.
+3. Tap **Set 2.5** — the `JS state:` readout updates, but the thumb stays put.
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+Every later prop update is ignored too. The on-screen `onEditingChanged` log
+shows what the native side reported during the drag.
 
-## Learn more
+**Expected:** the thumb follows the `value` prop, as it does before step 2.
+**Actual:** after one drag, `value` is write-once-ignored forever.
 
-To learn more about developing your project with Expo, look at the following resources:
+## Cause
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+`ios/SliderView.swift` only applies an external value inside an `onChange`
+handler that bails out while a drag is in progress:
 
-## Join the community
+```swift
+@State var isEditing: Bool = false
 
-Join our community of developers creating universal apps.
+.onChange(of: props.value) { newValue in
+  guard !isEditing else { return }   // <- drops the update
+  value = clamp(newValue ?? 0.0)
+}
+```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Two things combine to make this permanent:
+
+1. **The drop is never retried.** `onChange(of:)` only fires on a transition, so
+   a value discarded by the guard is simply lost — there is no replay when the
+   drag ends. The SwiftUI `@State` and the JS prop are then out of sync with
+   nothing to reconcile them.
+2. **`isEditing` latches.** It is written from `handleEditingChanged`, a closure
+   built inside the `sliderContent` `@ViewBuilder` that captures `self` — a
+   `View` struct copy. The body re-evaluates every frame during a drag, so the
+   `false` write can land on storage that is no longer live. JS still receives
+   the `onEditingChanged(false)` event (it is dispatched on the next line), which
+   is why the log looks correct while the Swift flag stays `true`.
+
+The guard itself is load-bearing — it is what stops the thumb snapping back
+mid-drag when JS echoes a stale value — so removing it regresses that fix.
+
+## Suggested fix
+
+Move the drag flag onto a reference type so the write cannot be lost, and treat
+the guard as an echo filter rather than a hard gate, so a value the view did not
+itself emit is always applied:
+
+```swift
+final class SliderSyncState: ObservableObject {
+  var isEditing: Bool = false
+  var echoes: Set<Float> = []
+}
+
+@StateObject var sync = SliderSyncState()
+
+.onChange(of: props.value) { newValue in
+  let incoming = clamp(newValue ?? 0.0)
+  if sync.isEditing {
+    if sync.echoes.contains(incoming) { return }  // our own value, coming back
+    sync.isEditing = false                        // external update: un-wedge
+    sync.echoes.removeAll()
+  }
+  value = incoming
+}
+.onChange(of: value) { newValue in
+  if props.value != newValue {
+    if sync.isEditing { sync.echoes.insert(newValue) }
+    props.onValueChanged(["value": newValue])
+  }
+}
+```
+
+with `handleEditingChanged` writing `sync.isEditing` and clearing `sync.echoes`.

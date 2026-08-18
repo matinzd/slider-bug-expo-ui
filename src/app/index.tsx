@@ -1,98 +1,71 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
+import { Host, Slider } from '@expo/ui/swift-ui';
+import { useState } from 'react';
+import { Button, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+const MIN = 0;
+const MAX = 10;
 
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
-  }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
+export default function SliderBugScreen() {
+  const [value, setValue] = useState(0);
+  const [log, setLog] = useState<string[]>([]);
+
+  const append = (line: string) =>
+    setLog((prev) => [line, ...prev].slice(0, 8));
+
   return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
-  );
-}
+    <SafeAreaView style={styles.container}>
+      <Text style={styles.title}>@expo/ui SwiftUI Slider</Text>
+      <Text style={styles.subtitle}>
+        Programmatic value updates stop applying after the first drag.
+      </Text>
 
-export default function HomeScreen() {
-  return (
-    <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
-          </ThemedText>
-        </ThemedView>
+      <Text style={styles.value}>JS state: {value.toFixed(2)}</Text>
 
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
+      <Host style={styles.host}>
+        <Slider
+          value={value}
+          min={MIN}
+          max={MAX}
+          step={0.01}
+          onValueChange={setValue}
+          onEditingChanged={(isEditing) =>
+            append(`onEditingChanged: ${isEditing}`)
+          }
+        />
+      </Host>
 
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
-        </ThemedView>
+      {/* Both buttons change the slider purely through the `value` prop. */}
+      <View style={styles.row}>
+        <Button title="Set 2.5" onPress={() => setValue(2.5)} />
+        <Button title="Set 7.5" onPress={() => setValue(7.5)} />
+        <Button title="Reset 0" onPress={() => setValue(0)} />
+      </View>
 
-        {Platform.OS === 'web' && <WebBadge />}
-      </SafeAreaView>
-    </ThemedView>
+      <Text style={styles.steps}>
+        1. Tap “Set 7.5” — the thumb moves. Prop updates work.{'\n'}
+        2. Drag the slider anywhere, then release.{'\n'}
+        3. Tap “Set 2.5” — JS state updates, the thumb does not move again.
+      </Text>
+
+      <Text style={styles.logTitle}>onEditingChanged events</Text>
+      {log.map((line, i) => (
+        <Text key={`${line}-${i}`} style={styles.logLine}>
+          {line}
+        </Text>
+      ))}
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    flexDirection: 'row',
-  },
-  safeArea: {
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
-  },
-  heroSection: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
-  },
-  title: {
-    textAlign: 'center',
-  },
-  code: {
-    textTransform: 'uppercase',
-  },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
-  },
+  container: { flex: 1, padding: 24, gap: 12 },
+  title: { fontSize: 20, fontWeight: '600' },
+  subtitle: { fontSize: 14, opacity: 0.6 },
+  value: { fontSize: 32, fontVariant: ['tabular-nums'] },
+  host: { height: 40 },
+  row: { flexDirection: 'row', gap: 16 },
+  steps: { fontSize: 14, lineHeight: 22, marginTop: 8 },
+  logTitle: { fontSize: 12, fontWeight: '600', marginTop: 8, opacity: 0.6 },
+  logLine: { fontSize: 12, fontVariant: ['tabular-nums'], opacity: 0.6 },
 });
